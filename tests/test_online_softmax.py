@@ -7,7 +7,7 @@ Verifies forward pass correctness, numerical stability, and backward pass gradie
 import pytest
 import torch
 
-from adapters import get_online_softmax_function, get_online_softmax_autograd_class
+from tests.adapters import get_online_softmax_function, get_online_softmax_autograd_class
 
 # Get implementations from adapters
 online_softmax = get_online_softmax_function()

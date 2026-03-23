@@ -8,7 +8,7 @@ value projection avoids materializing the full attention matrix.
 import pytest
 import torch
 
-from adapters import get_fused_softmax_function, get_softmax_matmul_reference
+from tests.adapters import get_fused_softmax_function, get_softmax_matmul_reference
 
 # Get implementations from adapters
 fused_softmax = get_fused_softmax_function()

@@ -31,15 +31,15 @@ def time_loop(fn, iters, warmup=5):
 if __name__ == "__main__":
     device = 'cuda'
     batch_sizes = [4, 16, 64, 256]
-    d1s = [256, 1024, 4096]
-    d2s = [256, 1024, 4096]
-    d3s = [256, 1024, 4096]
-    block_sizes = [32, 64, 128]
+    d1s = [256, 512]
+    d2s = [128, 256]
+    d3s = [256, 512]
+    block_sizes = [32]
     
     df = pd.DataFrame(columns=['batch_size', 'd1', 'd2', 'd3', 'triton', 'BLOCK', 'forward_ms_mean', 'forward_ms_std', 'forward_peak_MiB'])
     for i, (batch_size, d1, d2, d3, block_size) in enumerate(product(batch_sizes, d1s, d2s, d3s, block_sizes)):
-        x = torch.randn(batch_size, d1, d2)
-        v = torch.randn(batch_size, d2, d3)
+        x = torch.randn(batch_size, d1, d2, device=device)
+        v = torch.randn(batch_size, d2, d3, device=device)
 
         if VERBOSE:
             print(f"batch_size={batch_size}, (d1,d2,d3)=({d1},{d2},{d3}), block_size={block_size}")
@@ -49,7 +49,7 @@ if __name__ == "__main__":
             lambda: fused_softmax(x, v, BLOCK_1=block_size, BLOCK_2=block_size),
             10
         )
-        df._append([batch_size, d1, d2, d3, True, block_size, np.mean(times).item(), np.std(times).item(), mem])
+        df.loc[2*i] = [batch_size, d1, d2, d3, True, block_size, np.mean(times).item(), np.std(times).item(), mem]
         if VERBOSE:
             print(f"   with triton: {np.mean(times).item()}ms, {mem}MiB max usage")
 
@@ -58,7 +58,7 @@ if __name__ == "__main__":
             lambda: softmax_mult(x, v),
             10
         )
-        df._append([batch_size, d1, d2, d3, False, np.nan, np.mean(times).item(), np.std(times).item(), mem])
+        df.loc[2*i+1] = [batch_size, d1, d2, d3, False, np.nan, np.mean(times).item(), np.std(times).item(), mem]
         if VERBOSE:
             print(f"   with pytorch: {np.mean(times).item()}ms, {mem}MiB max usage\n")
             

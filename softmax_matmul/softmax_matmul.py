@@ -14,7 +14,7 @@ def fused_softmax_kernel(
     stride_vbatch, stride_vrow, stride_vcol,
     stride_obatch, stride_orow, stride_ocol,
     d1: tl.constexpr, d2: tl.constexpr, d3: tl.constexpr,
-    BLOCK_1: tl.constexpr, BLOCK_2: tl.constexpr,
+    BLOCK_1: tl.constexpr, BLOCK_2: tl.constexpr, d2_pow: tl.constexpr,
 ):
     # Each program:
     # - reads a strip of shape (BLOCK_1, d2) from x
@@ -29,7 +29,7 @@ def fused_softmax_kernel(
         shape=(d1, d2),                           # shape of parent tensor
         strides=(stride_xrow, stride_xcol),       # strides of parent tensor
         offsets=(pid_row * BLOCK_1, 0),           # add offset to start at the right row
-        block_shape=(BLOCK_1, d2),                # desired shape of output block
+        block_shape=(BLOCK_1, d2_pow),            # desired shape of output block (MUST be powers of 2...)
         order=(1, 0),                             # prioritize dimension 1 over dimension 0 for memory access (optimization)
     )
     v_block = tl.make_block_ptr(
@@ -37,8 +37,8 @@ def fused_softmax_kernel(
         shape=(d2, d3),                   
         strides=(stride_vrow, stride_vcol),
         offsets=(0, pid_col * BLOCK_2),   
-        block_shape=(d2, BLOCK_2),       
-        order=(0, 1),                   
+        block_shape=(d2_pow, BLOCK_2),       
+        order=(1, 0),                   
     )
     out_block = tl.make_block_ptr(
         out_ptr + pid_batch * stride_obatch, 
@@ -49,10 +49,11 @@ def fused_softmax_kernel(
         order=(1, 0),                   
     )
 
-    # for x, we cannot auto-pad with -inf so be pad manually 
+    # for x, we cannot auto-pad with -inf so be pad manually with a mask
     # this is not a pb for v since we need to pad with zeros
     x_rows = tl.load(x_block, boundary_check=(0,1), padding_option="")     # (BLOCK_1, d2)
-    x_rows = tl.where(tl.arange(0, BLOCK_1) < d1, x_rows, float('-inf'))   
+    mask = ((pid_row * BLOCK_1 + tl.arange(0, BLOCK_1)) < d1)[:, None] & (tl.arange(0, d2_pow) < d2)[None, :]
+    x_rows = tl.where(mask, x_rows, float('-inf'))   
     v_cols = tl.load(v_block, boundary_check=(0,1), padding_option="zero") # (d2, BLOCK_2)
 
     max_x = x_rows.max(axis=1)  # (BLOCK_1,)
@@ -79,18 +80,20 @@ def fused_softmax(x, v, BLOCK_1=16, BLOCK_2=16):
     x = x.reshape(-1, d1, d2)
     v = v.reshape(-1, d2, d3)
 
+    d2_next_pow = triton.next_power_of_2(d2)
+
     n_batch = x.shape[0]
-    out = torch.empty_like(x)
+    out = torch.empty((n_batch, d1, d3), device=x.device, dtype=x.dtype)
 
     # Calculate grid dimensions
     grid = (n_batch, triton.cdiv(d1, BLOCK_1), triton.cdiv(d3, BLOCK_2))
 
     # Launch kernel
-    softmax_matmult_kernel[grid](
+    fused_softmax_kernel[grid](
         x, v, out,
         *x.stride(), *v.stride(), *out.stride(),
         d1, d2, d3,
-        BLOCK_1=BLOCK_1, BLOCK_2=BLOCK_2,
+        BLOCK_1=BLOCK_1, BLOCK_2=BLOCK_2, d2_pow=d2_next_pow
     )
 
     return out.reshape(bs + [d1, d3])
